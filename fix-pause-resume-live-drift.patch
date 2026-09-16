@@ -1,7 +1,7 @@
 diff --git a/vaft/vaft-ublock-origin.js b/vaft/vaft-ublock-origin.js
 --- a/vaft/vaft-ublock-origin.js
 +++ b/vaft/vaft-ublock-origin.js
-@@
+@@ -1870,19 +1870,32 @@
      const playerBufferState = {
          channelName: null,
          hasStreamStarted: false,
@@ -25,10 +25,7 @@ diff --git a/vaft/vaft-ublock-origin.js b/vaft/vaft-ublock-origin.js
 +        resumedAt: 0
      };
 +
-+    // A user pause can leave Twitch's player state and the video element at
-+    // different positions. Do not compare the first post-resume sample with
-+    // the pre-pause sample, or the monitor may falsely trigger pause/play and
-+    // create a recovery loop around an old MSE buffer.
++    // Do not compare the first post-resume sample with pre-pause state.
 +    function resetBufferMonitorState() {
 +        playerBufferState.position = 0;
 +        playerBufferState.videoCurrentTime = undefined;
@@ -38,7 +35,7 @@ diff --git a/vaft/vaft-ublock-origin.js b/vaft/vaft-ublock-origin.js
 +        playerBufferState.fixAttempts = 0;
 +        playerBufferState.recoveryReloadUsed = false;
 +    }
-@@
+@@ -1903,9 +1903,13 @@
                      video.__tasIntentHooked = true;
                      video.addEventListener('pause', () => {
                          if (!playerBufferState.weJustPaused || (Date.now() - playerBufferState.weJustPaused) > 2000) {
@@ -53,20 +50,8 @@ diff --git a/vaft/vaft-ublock-origin.js b/vaft/vaft-ublock-origin.js
 +                        playerBufferState.resumedAt = Date.now();
 +                        resetBufferMonitorState();
                      });
-@@
-                     const videoEl = player.getHTMLVideoElement?.();
-                     const videoCurrentTime = videoEl?.currentTime;
-                     if (position !== undefined && bufferedPosition !== undefined) {
-@@
+@@ -1957,1 +1957,4 @@
                          const playerNotActivelyPlaying = videoEl && (videoEl.readyState < 2 || videoEl.paused);
 +                        if (videoEl?.paused || player.isPaused()) {
 +                            resetBufferMonitorState();
 +                        }
-@@
--                        if (playerBufferState.position > 0 && position - playerBufferState.position > 5 && !playerBufferState.inAdBreak && (!playerBufferState.lastBackupSwitchAt || Date.now() - playerBufferState.lastBackupSwitchAt > 10000)) {
-+                        if (playerBufferState.position > 0 &&
-+                            position - playerBufferState.position > 5 &&
-+                            !playerBufferState.inAdBreak &&
-+                            (!playerBufferState.lastBackupSwitchAt || Date.now() - playerBufferState.lastBackupSwitchAt > 10000) &&
-+                            (!playerBufferState.pausedAt || Date.now() - playerBufferState.pausedAt > 2000)) {
-*** End Patch
