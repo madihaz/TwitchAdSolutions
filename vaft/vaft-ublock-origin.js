@@ -1906,6 +1906,24 @@ twitch-videoad.js text/javascript
                         }
                     });
                     video.addEventListener('play', () => {
+                        // A user pause can outlive the HLS live window. If the next
+                        // playlist is temporarily all-stripped, reusing pre-pause
+                        // recovery state can rewind MEDIA-SEQUENCE and make playback
+                        // loop over old segments. Treat resume as a new playback epoch
+                        // and discard stale playlist-recovery caches.
+                        try {
+                            const channelName = playerBufferState.channelName;
+                            const streamInfo = channelName ? StreamInfos[channelName] : null;
+                            if (streamInfo) {
+                                streamInfo.RecoverySegments = [];
+                                streamInfo.RecoveryStartSeq = undefined;
+                                streamInfo.LastCleanNativeM3U8 = null;
+                                streamInfo.LastCleanNativePlaylistAt = 0;
+                                streamInfo.ConsecutiveAllStrippedPolls = 0;
+                                streamInfo.TotalAllStrippedPolls = 0;
+                                streamInfo.FreezeStartedAt = 0;
+                            }
+                        } catch {}
                         playerBufferState.userPauseIntent = false;
                         playerBufferState.loggedPauseIntent = false;
                     });
