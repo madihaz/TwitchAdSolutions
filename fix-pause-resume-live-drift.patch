@@ -1,22 +1,7 @@
 diff --git a/vaft/vaft-ublock-origin.js b/vaft/vaft-ublock-origin.js
 --- a/vaft/vaft-ublock-origin.js
 +++ b/vaft/vaft-ublock-origin.js
-@@ -1870,19 +1870,32 @@
-     const playerBufferState = {
-         channelName: null,
-         hasStreamStarted: false,
-         position: 0,
-         bufferedPosition: 0,
-         bufferDuration: 0,
-         numSame: 0,
-         fixAttempts: 0,
-         lastFixTime: 0,
-         isLive: true,
-         lastBackupSwitchAt: 0,
-         lastReloadAt: 0,
-         recoveryReloadUsed: false,
-         userPauseIntent: false,
-         loggedPauseIntent: false,
+@@ -1885,4 +1885,17 @@
          weJustPaused: 0,
          inAdBreak: false,
 -        vaftEverUnmuted: false
@@ -50,7 +35,11 @@ diff --git a/vaft/vaft-ublock-origin.js b/vaft/vaft-ublock-origin.js
 +                        playerBufferState.resumedAt = Date.now();
 +                        resetBufferMonitorState();
                      });
-@@ -1957,1 +1957,4 @@
+@@ -1954,5 +1954,8 @@
+                     const videoCurrentTime = videoEl?.currentTime;
+                     if (position !== undefined && bufferedPosition !== undefined) {
+                         // NOTE: This could be improved. It currently lets the player fully eat the full buffer before it triggers pause/play
+                         // Skip the buffer-stall check while the <video> element isn't actively trying to play: readyState < 2 (MSE init / seek) or paused=true (autoplay-policy /
                          const playerNotActivelyPlaying = videoEl && (videoEl.readyState < 2 || videoEl.paused);
 +                        if (videoEl?.paused || player.isPaused()) {
 +                            resetBufferMonitorState();
