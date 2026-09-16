@@ -1,0 +1,72 @@
+diff --git a/vaft/vaft-ublock-origin.js b/vaft/vaft-ublock-origin.js
+--- a/vaft/vaft-ublock-origin.js
++++ b/vaft/vaft-ublock-origin.js
+@@
+     const playerBufferState = {
+         channelName: null,
+         hasStreamStarted: false,
+         position: 0,
+         bufferedPosition: 0,
+         bufferDuration: 0,
+         numSame: 0,
+         fixAttempts: 0,
+         lastFixTime: 0,
+         isLive: true,
+         lastBackupSwitchAt: 0,
+         lastReloadAt: 0,
+         recoveryReloadUsed: false,
+         userPauseIntent: false,
+         loggedPauseIntent: false,
+         weJustPaused: 0,
+         inAdBreak: false,
+-        vaftEverUnmuted: false
++        vaftEverUnmuted: false,
++        pausedAt: 0,
++        resumedAt: 0
+     };
++
++    // A user pause can leave Twitch's player state and the video element at
++    // different positions. Do not compare the first post-resume sample with
++    // the pre-pause sample, or the monitor may falsely trigger pause/play and
++    // create a recovery loop around an old MSE buffer.
++    function resetBufferMonitorState() {
++        playerBufferState.position = 0;
++        playerBufferState.videoCurrentTime = undefined;
++        playerBufferState.bufferedPosition = 0;
++        playerBufferState.bufferDuration = 0;
++        playerBufferState.numSame = 0;
++        playerBufferState.fixAttempts = 0;
++        playerBufferState.recoveryReloadUsed = false;
++    }
+@@
+                     video.__tasIntentHooked = true;
+                     video.addEventListener('pause', () => {
+                         if (!playerBufferState.weJustPaused || (Date.now() - playerBufferState.weJustPaused) > 2000) {
+                             playerBufferState.userPauseIntent = true;
++                            playerBufferState.pausedAt = Date.now();
++                            resetBufferMonitorState();
+                         }
+                     });
+                     video.addEventListener('play', () => {
+                         playerBufferState.userPauseIntent = false;
+                         playerBufferState.loggedPauseIntent = false;
++                        playerBufferState.resumedAt = Date.now();
++                        resetBufferMonitorState();
+                     });
+@@
+                     const videoEl = player.getHTMLVideoElement?.();
+                     const videoCurrentTime = videoEl?.currentTime;
+                     if (position !== undefined && bufferedPosition !== undefined) {
+@@
+                         const playerNotActivelyPlaying = videoEl && (videoEl.readyState < 2 || videoEl.paused);
++                        if (videoEl?.paused || player.isPaused()) {
++                            resetBufferMonitorState();
++                        }
+@@
+-                        if (playerBufferState.position > 0 && position - playerBufferState.position > 5 && !playerBufferState.inAdBreak && (!playerBufferState.lastBackupSwitchAt || Date.now() - playerBufferState.lastBackupSwitchAt > 10000)) {
++                        if (playerBufferState.position > 0 &&
++                            position - playerBufferState.position > 5 &&
++                            !playerBufferState.inAdBreak &&
++                            (!playerBufferState.lastBackupSwitchAt || Date.now() - playerBufferState.lastBackupSwitchAt > 10000) &&
++                            (!playerBufferState.pausedAt || Date.now() - playerBufferState.pausedAt > 2000)) {
+*** End Patch
