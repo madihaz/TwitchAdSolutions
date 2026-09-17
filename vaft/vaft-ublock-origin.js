@@ -1917,15 +1917,39 @@ twitch-videoad.js text/javascript
                             if (streamInfo) {
                                 streamInfo.RecoverySegments = [];
                                 streamInfo.RecoveryStartSeq = undefined;
-                                streamInfo.LastCleanNativeM3U8 = null;
-                                streamInfo.LastCleanNativePlaylistAt = 0;
-                                streamInfo.ConsecutiveAllStrippedPolls = 0;
-                                streamInfo.TotalAllStrippedPolls = 0;
-                                streamInfo.FreezeStartedAt = 0;
                             }
                         } catch {}
                         playerBufferState.userPauseIntent = false;
                         playerBufferState.loggedPauseIntent = false;
+                        // A resume can leave the existing MSE audio decoder on stale
+                        // buffered data even when the video timeline has recovered.
+                        // Nudge the media timeline after Twitch has resumed so the
+                        // decoder flushes the stale A/V queue without forcing a reload.
+                        setTimeout(() => {
+                            try {
+                                const video = getPlayerVideoElement();
+                                if (!video || video.paused || video.ended || video.readyState < 2) return;
+                                if (!video.seekable || video.seekable.length === 0) return;
+
+                                const seekableStart = video.seekable.start(0);
+                                const seekableEnd = video.seekable.end(video.seekable.length - 1);
+                                const currentTime = video.currentTime;
+                                if (!Number.isFinite(currentTime) ||
+                                    !Number.isFinite(seekableStart) ||
+                                    !Number.isFinite(seekableEnd) ||
+                                    currentTime < seekableStart ||
+                                    currentTime > seekableEnd) return;
+
+                                // A tiny forward seek stays at essentially the same live
+                                // position but forces MSE to flush/re-align audio decoding.
+                                const nudgeTarget = Math.min(seekableEnd, currentTime + 0.1);
+                                if (nudgeTarget > currentTime) {
+                                    video.currentTime = nudgeTarget;
+                                    console.log('[AD DEBUG] Post-resume A/V sync nudge: +' +
+                                        (nudgeTarget - currentTime).toFixed(3) + 's');
+                                }
+                            } catch {}
+                        }, 750);
                     });
                 }
             }
