@@ -138,7 +138,6 @@ twitch-videoad.js text/javascript
             LastSeenAt: Date.now(),
             EncodingsM3U8: encodingsM3u8,
             UsherParams: usherParams,
-            PlaybackEpoch: 0,
             Urls: Object.create(null),
             ResolutionList: [],
             RequestedAds: new Set(),
@@ -539,31 +538,10 @@ twitch-videoad.js text/javascript
                 }
                 url = url.trimEnd();
                 if (url.endsWith('m3u8')) {
-                    const requestStreamInfo = StreamInfosByUrl[url];
-                    const requestEpoch = requestStreamInfo ? requestStreamInfo.PlaybackEpoch : null;
                     return new Promise(function(resolve, reject) {
                         const processAfter = async function(response) {
                             if (response.status === 200) {
-                                const responseText = await response.text();
-                                let processed = await processM3U8(url, responseText, realFetch, requestEpoch);
-                                const currentStreamInfo = StreamInfosByUrl[url];
-
-                                // A playlist request can start before a user pause and complete
-                                // afterward. Never return that pre-pause playlist to MSE.
-                                if (processed === null && currentStreamInfo && requestEpoch !== null) {
-                                    const retryEpoch = currentStreamInfo.PlaybackEpoch;
-                                    const retryResponse = await realFetch(url, options);
-                                    if (retryResponse.status === 200) {
-                                        processed = await processM3U8(
-                                            url,
-                                            await retryResponse.text(),
-                                            realFetch,
-                                            retryEpoch
-                                        );
-                                    }
-                                }
-
-                                resolve(new Response(processed === null ? '' : processed));
+                                resolve(new Response(await processM3U8(url, await response.text(), realFetch)));
                             } else {
                                 resolve(response);
                             }
@@ -1096,22 +1074,11 @@ twitch-videoad.js text/javascript
         return closestResolutionUrl;
     }
     // Core ad-blocking logic: detect ads in m3u8, fetch backup streams, strip ad segments
-    async function processM3U8(url, textStr, realFetch, requestEpoch = null) {
+    async function processM3U8(url, textStr, realFetch) {
         const streamInfo = StreamInfosByUrl[url];
         if (!streamInfo) {
             return textStr;
         }
-
-        const requestIsCurrent = () =>
-            requestEpoch === null || streamInfo.PlaybackEpoch === requestEpoch;
-
-        // The request may have started before a user pause. Do not mutate recovery state
-        // or return its playlist after the playback epoch has changed.
-        if (!requestIsCurrent()) {
-            console.log('[AD DEBUG] Discarding stale pre-pause m3u8 response');
-            return null;
-        }
-
         streamInfo.LastSeenAt = Date.now();
         if (HasTriggeredPlayerReload) {
             HasTriggeredPlayerReload = false;
@@ -1430,17 +1397,8 @@ twitch-videoad.js text/javascript
                                 urlInfo.searchParams.set('sig', spat.signature);
                                 urlInfo.searchParams.set('token', spat.value);
                                 const encodingsM3u8Response = await realFetch(urlInfo.href);
-                                if (!requestIsCurrent()) {
-                                    console.log('[AD DEBUG] Discarding stale pre-pause backup encoding');
-                                    return null;
-                                }
                                 if (encodingsM3u8Response.status === 200) {
-                                    encodingsM3u8 = await encodingsM3u8Response.text();
-                                    if (!requestIsCurrent()) {
-                                        console.log('[AD DEBUG] Discarding stale pre-pause backup encoding body');
-                                        return null;
-                                    }
-                                    streamInfo.BackupEncodingsM3U8Cache[playerType] = encodingsM3u8;
+                                    encodingsM3u8 = streamInfo.BackupEncodingsM3U8Cache[playerType] = await encodingsM3u8Response.text();
                                     // Reset detection diagnostic counter on success — token fetched, m3u8 fetched.
                                     streamInfo.ConsecutiveTokenFetchFailures = 0;
                                     streamInfo.LoggedTokenFailureStreak = false;
@@ -1472,16 +1430,8 @@ twitch-videoad.js text/javascript
                         try {
                             const streamM3u8Url = getStreamUrlForResolution(encodingsM3u8, currentResolution);
                             const streamM3u8Response = await realFetch(streamM3u8Url);
-                            if (!requestIsCurrent()) {
-                                console.log('[AD DEBUG] Discarding stale pre-pause backup playlist');
-                                return null;
-                            }
                             if (streamM3u8Response.status == 200) {
                                 const m3u8Text = await streamM3u8Response.text();
-                                if (!requestIsCurrent()) {
-                                    console.log('[AD DEBUG] Discarding stale pre-pause backup playlist body');
-                                    return null;
-                                }
                                 if (m3u8Text) {
                                     if (playerType == FallbackPlayerType) {
                                         fallbackM3u8 = m3u8Text;
@@ -1565,10 +1515,6 @@ twitch-videoad.js text/javascript
             // causing buffer reconciliation failures and a forced reload. Check IsShowingAd
             // here to discard stale results.
             if (backupM3u8 && streamInfo.IsShowingAd) {
-                if (!requestIsCurrent()) {
-                    console.log('[AD DEBUG] Discarding stale pre-pause backup commit');
-                    return null;
-                }
                 textStr = backupM3u8;
                 streamInfo.LastCommittedBackupPlayerType = backupPlayerType;
                 if (streamInfo.ActiveBackupPlayerType != backupPlayerType) {
@@ -1957,13 +1903,6 @@ twitch-videoad.js text/javascript
                     video.addEventListener('pause', () => {
                         if (!playerBufferState.weJustPaused || (Date.now() - playerBufferState.weJustPaused) > 2000) {
                             playerBufferState.userPauseIntent = true;
-                            const channelName = playerBufferState.channelName;
-                            const streamInfo = channelName ? StreamInfos[channelName] : null;
-                            if (streamInfo) {
-                                streamInfo.PlaybackEpoch = (streamInfo.PlaybackEpoch || 0) + 1;
-                                console.log('[AD DEBUG] User pause — playback epoch ' +
-                                    streamInfo.PlaybackEpoch + '; invalidating in-flight m3u8 work');
-                            }
                         }
                     });
                     video.addEventListener('play', () => {
@@ -2001,14 +1940,13 @@ twitch-videoad.js text/javascript
                                     currentTime < seekableStart ||
                                     currentTime > seekableEnd) return;
 
-                                // A meaningful live-edge seek is required to move MSE off
-                                // stale buffered audio. Do nothing for small, normal drift.
-                                const liveTarget = Math.max(seekableStart, seekableEnd - 0.5);
-                                const drift = liveTarget - currentTime;
-                                if (drift > 1) {
-                                    video.currentTime = liveTarget;
-                                    console.log('[AD DEBUG] Post-resume live resync: +' +
-                                        drift.toFixed(1) + 's');
+                                // A tiny forward seek stays at essentially the same live
+                                // position but forces MSE to flush/re-align audio decoding.
+                                const nudgeTarget = Math.min(seekableEnd, currentTime + 0.1);
+                                if (nudgeTarget > currentTime) {
+                                    video.currentTime = nudgeTarget;
+                                    console.log('[AD DEBUG] Post-resume A/V sync nudge: +' +
+                                        (nudgeTarget - currentTime).toFixed(3) + 's');
                                 }
                             } catch {}
                         }, 750);
